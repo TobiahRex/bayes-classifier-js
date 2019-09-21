@@ -12,11 +12,29 @@ class Classifier {
     // Category counts
     // Category probabilities
     this.dict = {};
+    /* NOTE: example:
+      this.dict = {
+        'am': {
+          word: 'am'
+          'happy': { count: 1 }  // also note that a word can have multiple different associated categories.
+        }
+      }
+    }
+
+    */
 
     // Each category
     // total tokens
     // total documents
     this.categories = {};
+    /* NOTE: example:
+      this.categories = {
+        happy: {
+          frequency: 1,
+          tokenCount: 2,
+        }
+      }
+    */
 
     // An array of just the words and categories for sorting
     // This is redundant and could probably be removed
@@ -32,102 +50,117 @@ class Classifier {
     return /\w+/.test(token);
   }
 
-  // Increment a word for a category
-  increment(token, category) {
-
-    // Increase the token count
-    this.categories[category].tokenCount++;
-
-    let word = this.dict[token];
-
-    // Is this a new word?
-    if (word === undefined) {
-      this.dict[token] = {
-          word: token,
-          [category]: { count: 1 }
-        };
-      // Track the key
-      this.wordList.push(token);
-    } else if (word[category] === undefined) {
-      word[category] = {
-          count: 1
-        };
-    } else {
-      word[category].count++;
-    }
-
-  }
-
   // Get some data to train
   train(data, category) {
+    this._trainMemoizeCategory(category);
+    this._trainMemoizeData(data, category);
+  }
 
-    if (this.categories[category] === undefined) {
-      this.categories[category] = {
-          docCount: 1,
-          tokenCount: 0
-        };
+  _trainMemoizeCategory(category) {
+    if (!this.categories[category]) {
+      const newCategory = {
+        docCount: 1, // NOTE: The total number of times this category was used for training input.
+        frequency: 0 // NOTE: The number of times a word was associated with this category
+      };
+      this.categories[category] = newCategory;
       this.categoryList.push(category);
     } else {
       this.categories[category].docCount++;
     }
+  }
 
+  _trainMemoizeData(data, inputCategory) {
     // Split into words
-    let tokens = data.split(/\W+/);
+    const words = data.split(/\W+/);
 
     // For every word
-    tokens.forEach(token => {
+    words.forEach(word => {
       token = token.toLowerCase();
       // Make sure it's ok
-      if (Classifier.validate(token)) {
+      if (Classifier.validate(word)) {
         // Increment it
-        this.increment(token, category);
+        // 1. Increase the word count
+        this.categories[inputCategory].frequency++; // NOTE: Every time a valid word is mapped to a category, increase that categories frequency.
+
+        const cachedWord = this.dict[word];
+
+        // 2. Is this a new word?
+        if (!cachedWord) {
+          this.dict[word] = {
+              word: word,
+              [inputCategory]: {
+                seen: 1, // NOTE: Number of times the word was seen with that category
+                frequency: 0, // NOTE: the frequency of this word relative to all the words in the category
+              }
+            };
+          // 3. Save the word to a list
+          this.wordList.push(word);
+        } else if (!cachedWord[inputCategory]) {
+          cachedWord[inputCategory] = { seen: 1, frequency: 0 };
+        } else {
+          cachedWord[inputCategory].seen++;
+        }
       }
     });
-
   }
 
   // Compute the probabilities
   probabilities() {
+    this._probabilitiesGenerateIndividual();
+    this._probablitiesGenerateBayesResult();
+  }
 
-    // Calculate all the frequencies
-    // word count / doc count
-    this.wordList.forEach(key => {
-      let word = this.dict[key];
+  _probabilitiesGenerateIndividual() {
+    /*
+      - Iterate across all the unique words.
+      - For each word, iterate across each category.
+        - if the word was NOT seen in the category set, then assign the category a value of nothing.
+        - If the word was seen within the category set, then,
+          Calculate the words frequency by taking the number of times that word was seen associated with that category,
+          and dividing it by the total number of words that were seen as a whole within that category.
+
+    */
+    this.wordList.forEach(word => {
+      let cachedWord = this.dict[word];
 
       this.categoryList.forEach(category => {
-        // If this word has no count for the category set it to 0
-        // TODO: better place to do this or unecessary?
-        if (word[category] === undefined) {
-          word[category] = {
-              count: 0
-            };
-        }
-        // Average frequency per document
-        let wordCat = word[category];
-        let cat = this.categories[category];
-        let freq = wordCat.count / cat.docCount;
-        wordCat.freq = freq;
+        if (!cachedWord[category]) cachedWord[category] = { seen: 0 };
+
+        // Average frequency per category record | e.g. How many times a word was seen with a category per training record.
+        const wordFreqPerCategory = (
+          cachedWord[category].seen
+          / this.categories[category].frequency
+        );
+
+        cachedWord[category].frequency = wordFreqPerCategory;
       });
     });
+  }
 
-    this.wordList.forEach(key => {
-      let word = this.dict[key];
+  _probablitiesGenerateBayesResult() {
+    this.wordList.forEach(word => {
+      let cachedWord = this.dict[word];
+
       // Probability via Bayes rule
       this.categoryList.forEach(category => {
         // Add frequencies together
         // Starting at 0, p is the accumulator
-        let sum = this.categoryList.reduce((p, cat) => {
-            let freq = word[cat].freq;
-            if (freq) {
-              return p + freq;
-            }
+        const totalFreqOfWordForAllCategoriesSeen = this.categoryList.reduce((total, cat) => {
+            const wordFreqPerCategory = cachedWord[cat].frequency;
+            if (wordFreqPerCategory) return total + wordFreqPerCategory;
+
             return p;
           }, 0);
-        let wordCat = word[category];
+
+
         // Constrain the probability
         // TODO: Is there a better way to handle this?
-        let prob = wordCat.freq / sum;
-        wordCat.prob = Math.max(0.01, Math.min(0.99, prob));
+        const probability = (
+          cachedWord[category].frequency // NOTE: the number of words in the category
+          / totalFreqOfWordForAllCategoriesSeen // NOTE:
+        );
+
+        cachedWord[category].probability = Math.max(0.01, Math.min(0.99, probability));
       });
     });
   }
