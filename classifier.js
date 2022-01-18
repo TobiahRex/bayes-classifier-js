@@ -5,9 +5,7 @@
 
 // An object that does classification with us of words
 class Classifier {
-
   constructor() {
-
     // Word objects
     // Category counts
     // Category probabilities
@@ -24,8 +22,8 @@ class Classifier {
     */
 
     // Each category
-    // total tokens
-    // total documents
+    // total tokens (total characters)
+    // total documents (total entries to be analyzed/saved)
     this.categories = {};
     /* NOTE: example:
       this.categories = {
@@ -40,7 +38,6 @@ class Classifier {
     // This is redundant and could probably be removed
     this.wordList = [];
     this.categoryList = [];
-
   }
 
   // A function to validate a toke
@@ -56,6 +53,58 @@ class Classifier {
     this._trainMemoizeData(data, category);
   }
 
+  /**
+   * @function _trainMemoizeData
+   * catalogue the given sentence by word. Map every word to the input category in the global "dict".
+   * Insert each word into the global word list.
+   * Update the number of times this word was seen with the input category.
+   * Update the number of times this word was seen relative to all the words in the category.
+   * @param
+   * @return
+   */
+  _trainMemoizeData(data, inputCategory) {
+    // Split into words
+    const words = data.split(/\W+/);
+
+    // For every word
+    words.forEach(word => {
+      word = word.toLowerCase();
+      // Make sure it's ok
+      if (Classifier.validate(word)) {
+        this.categories[inputCategory].words++;
+
+        const cachedWord = this.dict[word];
+
+        // 2. Is this a new word?
+        if (!cachedWord) {
+          this.dict[word] = {
+            word: word,
+            [inputCategory]: {
+              seen: 1, // NOTE: Number of times the word was seen with that category
+              frequency: 0 // NOTE: the frequency of this word relative to all the words in the category
+            }
+          };
+          // 3. Save the word to a list
+          this.wordList.push(word);
+        } else if (!cachedWord[inputCategory]) {
+          cachedWord[inputCategory] = {
+            seen: 1,
+            frequency: 0,
+          };
+        } else {
+          cachedWord[inputCategory].seen++;
+        }
+      }
+    });
+  }
+
+  /**
+   * @function _trainMemoizeCategory
+   * Create a new category if one doesn't already exist.
+   *
+   * @param
+   * @return
+   */
   _trainMemoizeCategory(category) {
     if (!this.categories[category]) {
       const newCategory = {
@@ -65,43 +114,8 @@ class Classifier {
       this.categories[category] = newCategory;
       this.categoryList.push(category);
     } else {
-      this.categories[category].docCount++;
+      this.categories[category].docCount++; // docCount = the number of sentence associated with this category
     }
-  }
-
-  _trainMemoizeData(data, inputCategory) {
-    // Split into words
-    const words = data.split(/\W+/);
-
-    // For every word
-    words.forEach(word => {
-      token = token.toLowerCase();
-      // Make sure it's ok
-      if (Classifier.validate(word)) {
-        // Increment it
-        // 1. Increase the word count
-        this.categories[inputCategory].frequency++; // NOTE: Every time a valid word is mapped to a category, increase that categories frequency.
-
-        const cachedWord = this.dict[word];
-
-        // 2. Is this a new word?
-        if (!cachedWord) {
-          this.dict[word] = {
-              word: word,
-              [inputCategory]: {
-                seen: 1, // NOTE: Number of times the word was seen with that category
-                frequency: 0, // NOTE: the frequency of this word relative to all the words in the category
-              }
-            };
-          // 3. Save the word to a list
-          this.wordList.push(word);
-        } else if (!cachedWord[inputCategory]) {
-          cachedWord[inputCategory] = { seen: 1, frequency: 0 };
-        } else {
-          cachedWord[inputCategory].seen++;
-        }
-      }
-    });
   }
 
   // Compute the probabilities
@@ -110,29 +124,32 @@ class Classifier {
     this._probablitiesGenerateBayesResult();
   }
 
+  /**
+   * @function _probabilitiesGenerateIndividual
+   * Iterate across all the unique words.
+   * For each word, iterate across each category O(n*n)
+   *    if the word was NOT seen in the category set, then assign the category a value of nothing.
+   *    If the word was seen within the category set, then,
+   *      Calculate the words frequency by taking the number of times that word was seen associated with that category,
+   *      and dividing it by the total number of input sentences that were seen in that category.
+   *      Assign the result to the global dictionary, under the word's category.frequency value.
+   *
+   * Gives -> P(word, Category) | Probability of word in Category
+   * @param
+   * @return
+   */
   _probabilitiesGenerateIndividual() {
-    /*
-      - Iterate across all the unique words.
-      - For each word, iterate across each category.
-        - if the word was NOT seen in the category set, then assign the category a value of nothing.
-        - If the word was seen within the category set, then,
-          Calculate the words frequency by taking the number of times that word was seen associated with that category,
-          and dividing it by the total number of words that were seen as a whole within that category.
-
-    */
     this.wordList.forEach(word => {
       let cachedWord = this.dict[word];
 
       this.categoryList.forEach(category => {
-        if (!cachedWord[category]) cachedWord[category] = { seen: 0 };
+        if (!cachedWord[category]) cachedWord[category] = { seen: 0 }; // Adds all non paired words/categories with eachother for a count of 0
 
-        // Average frequency per category record | e.g. How many times a word was seen with a category per training record.
-        const wordFreqPerCategory = (
-          cachedWord[category].seen
-          / this.categories[category].frequency
-        );
+        // NOTE: Effective result is the number of words that exist for each respective input.
+        const wordFreqPerCategoryDoc =
+          cachedWord[category].seen / this.categories[category].docCount; // NOTE: The total number of words seen in the category
 
-        cachedWord[category].frequency = wordFreqPerCategory;
+        cachedWord[category].frequency = wordFreqPerCategoryDoc;
       });
     });
   }
@@ -144,48 +161,46 @@ class Classifier {
       // Probability via Bayes rule
       this.categoryList.forEach(category => {
         // Add frequencies together
-        // Starting at 0, p is the accumulator
-        const totalFreqOfWordForAllCategoriesSeen = this.categoryList.reduce((total, cat) => {
-            const wordFreqPerCategory = cachedWord[cat].frequency;
-            if (wordFreqPerCategory) return total + wordFreqPerCategory;
+        // Starting at 0, "total" is the accumulator
+        const totalWordFreqForAllCategories = this.categoryList.reduce((total, cat) => {
+          const wordFreqPerCategoryDoc = cachedWord[cat].frequency; // The frequency of the word with this category (calculated in previous step)
+          if (wordFreqPerCategoryDoc) {
+            return total + wordFreqPerCategoryDoc; // add this categories frequency to global total for this word.
+          }
 
-            return p;
-          }, 0);
-
+          return total;
+        }, 0);
 
         // Constrain the probability
         // TODO: Is there a better way to handle this?
-        const probability = (
-          cachedWord[category].frequency // NOTE: the number of words in the category
-          / totalFreqOfWordForAllCategoriesSeen // NOTE:
-        );
+        const probability =
+          cachedWord[category].frequency / totalWordFreqForAllCategories; // NOTE: the frequency of the word per category document // NOTE:
 
-        cachedWord[category].probability = Math.max(0.01, Math.min(0.99, probability));
+        cachedWord[category].probability = Math.max(
+          0.01,
+          Math.min(0.99, probability)
+        );
       });
     });
   }
 
   // Now we have some data we need to guess
   guess(data) {
-
     // All the tokens
-    let tokens = data.split(/\W+/);
+    const words = data.split(/\W+/);
 
     // Now let's collect all the probability data
-    let words = [];
+    let cachedWords = [];
 
     // TODO: If a word appears more than once should I add it just once or
     // the number of times it appears?
     // let hash = {};
 
-    tokens.forEach(token => {
-      token = token.toLowerCase();
-      if (Classifier.validate(token)) {
+    words.forEach(word => {
+      word = word.toLowerCase();
+      if (Classifier.validate(word)) {
         // Collect the probability
-        if (this.dict[token] !== undefined) { // && !hash[token]) {
-          let word = this.dict[token];
-          words.push(word);
-        }
+        if (this.dict[word]) cachedWords.push(this.dict[word]);
         // hash[token] = true;
       } else {
         // For an unknown word
@@ -202,24 +217,23 @@ class Classifier {
     // Multiply the probabilities and add the results to sum
     // Starting with an empty object, product is the accumulator
     let sum = 0;
-    let products = this.categoryList.reduce((product, category) => {
-        product[category] = words.reduce((prob, word) => {
-            // Multiply probabilities together
-            return prob * word[category].prob;
-          }, 1);
-        sum += product[category];
-        return product;
-      }, {});
+    const products = this.categoryList.reduce((result, category) => {
+      result[category] = cachedWords.reduce((totalProb, cachedWord) => {
+        // Multiply probabilities together
+        return totalProb * cachedWord[category].probability;
+      }, 1);
+      sum += result[category];
+      return result;
+    }, {});
 
     // Apply formula
     let results = {};
     this.categoryList.forEach(category => {
       results[category] = {
-          probability: products[category] / sum
-        };
+        probability: products[category] / sum
+      };
       // TODO: include the relevant words and their scores/probabilities in the results?
     });
     return results;
   }
-
 }
